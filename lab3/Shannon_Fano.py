@@ -1,100 +1,99 @@
 import cv2
 import numpy as np
-from collections import Counter
-import math
+import matplotlib.pyplot as plt
+import os
 
-# Shannon–Fano Encoding Functions
-
-
-def shannon_fano(symbols):
-    """Recursively assign Shannon–Fano codes"""
+# ---------- Shannon Fano Functions ----------
+def shannon_fano(symbols, codes, prefix=""):
     if len(symbols) == 1:
-        return {symbols[0][0]: ""}
-
-    # Find split point
-    total = sum(freq for _, freq in symbols)
-    acc = 0
-    split_idx = 0
-    for i, (_, freq) in enumerate(symbols):
-        acc += freq
+        codes[symbols[0][0]] = prefix
+        return
+    total = sum([s[1] for s in symbols])
+    acc, split = 0, 0
+    for i, s in enumerate(symbols):
+        acc += s[1]
         if acc >= total / 2:
-            split_idx = i
+            split = i + 1
             break
+    left, right = symbols[:split], symbols[split:]
+    shannon_fano(left, codes, prefix + "0")
+    shannon_fano(right, codes, prefix + "1")
 
-    left = symbols[:split_idx+1]
-    right = symbols[split_idx+1:]
+def build_codes(pixels):
+    unique, counts = np.unique(pixels, return_counts=True)
+    symbols = sorted(list(zip(unique, counts)), key=lambda x: x[1], reverse=True)
+    codes = {}
+    shannon_fano(symbols, codes)
+    return codes
 
-    left_codes = shannon_fano(left)
-    right_codes = shannon_fano(right)
-
-    # Add '0' to left, '1' to right
-    for k in left_codes:
-        left_codes[k] = '0' + left_codes[k]
-    for k in right_codes:
-        right_codes[k] = '1' + right_codes[k]
-
-    return {**left_codes, **right_codes}
-
-
-# Image Compression
-
-def compress_image(image_path):
-    # Read image in grayscale
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-
-    # Flatten to 1D array
+def compress(img):
     pixels = img.flatten()
+    codes = build_codes(pixels)
+    encoded = "".join([codes[p] for p in pixels])
+    return codes, encoded
 
-    # Count frequency of each pixel value
-    freq = Counter(pixels)
-
-    # Sort by frequency (descending)
-    sorted_freq = sorted(freq.items(), key=lambda x: x[1], reverse=True)
-
-    # Generate Shannon–Fano codes
-    codes = shannon_fano(sorted_freq)
-
-    # Encode pixels
-    encoded_data = ''.join(codes[p] for p in pixels)
-
-    return img.shape, codes, encoded_data
-
-
-# Image Decompression
-
-def decompress_image(shape, codes, encoded_data):
-    # Reverse the code dictionary for decoding
+def decompress(encoded, codes, shape):
     reverse_codes = {v: k for k, v in codes.items()}
+    decoded_pixels, buffer = [], ""
+    for bit in encoded:
+        buffer += bit
+        if buffer in reverse_codes:
+            decoded_pixels.append(reverse_codes[buffer])
+            buffer = ""
+    return np.array(decoded_pixels, dtype=np.uint8).reshape(shape)
 
-    decoded_pixels = []
-    current_code = ""
+# ---------- Main Program ----------
+# Input image (use full path if needed)
+image_path = r"C:\Users\NITESH\OneDrive\Desktop\DIP\lab3\lena.png"
+img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-    for bit in encoded_data:
-        current_code += bit
-        if current_code in reverse_codes:
-            decoded_pixels.append(reverse_codes[current_code])
-            current_code = ""
+if img is None:
+    raise FileNotFoundError(f"Image not found at {image_path}")
 
-    # Convert back to image
-    img_array = np.array(decoded_pixels, dtype=np.uint8).reshape(shape)
-    return img_array
+# Compress + Decompress
+codes, encoded = compress(img)
+reconstructed = decompress(encoded, codes, img.shape)
 
+# Save output image
+output_path = "reconstructed.png"
+cv2.imwrite(output_path, reconstructed)
 
-# Example Run
+# File sizes
+input_size = os.path.getsize(image_path) / 1024   # KB
+output_size = os.path.getsize(output_path) / 1024 # KB
 
-if __name__ == "__main__":
-    # Path to your grayscale image
-    image_path = "lena.png"
+# Dimensions
+h, w = img.shape
+dims = f"{w}×{h}"
 
-    # Compress
-    shape, codes, encoded_data = compress_image(image_path)
-    print("Shannon–Fano Codes:", codes)
-    print("Original bits:", shape[0] * shape[1] * 8)
-    print("Compressed bits:", len(encoded_data))
+# ---------- Overlay size + dims directly on images ----------
+def add_info(image, size_kb, dims_text, label):
+    img_copy = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    text1 = f"{label}"
+    text2 = f"Size: {size_kb:.2f} KB"
+    text3 = f"Dims: {dims_text}"
+    cv2.putText(img_copy, text1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    cv2.putText(img_copy, text2, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    cv2.putText(img_copy, text3, (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+    return img_copy
 
-    # Decompress
-    reconstructed_img = decompress_image(shape, codes, encoded_data)
+img_info = add_info(img, input_size, dims, "Input Image")
+reconstructed_info = add_info(reconstructed, output_size, dims, "Reconstructed Image")
 
-    # Save output
-    cv2.imwrite("reconstructed.png", reconstructed_img)
-    print("Decompressed image saved as reconstructed.png")
+# ---------- Show both ----------
+fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+
+axs[0].imshow(cv2.cvtColor(img_info, cv2.COLOR_BGR2RGB))
+axs[0].axis("off")
+
+axs[1].imshow(cv2.cvtColor(reconstructed_info, cv2.COLOR_BGR2RGB))
+axs[1].axis("off")
+
+plt.tight_layout()
+
+# Save the figure to file
+plt.savefig("comparison.png", dpi=300, bbox_inches="tight")
+
+# Show on screen
+plt.show()
+
